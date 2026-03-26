@@ -10,6 +10,7 @@ STATE_TOOL="$SCRIPT_DIR/manage_state.py"
 
 python3 "$STATE_TOOL" init --state "$STATE_FILE" >/dev/null
 python3 "$STATE_TOOL" activate --state "$STATE_FILE" >/dev/null
+python3 "$STATE_TOOL" set-style --state "$STATE_FILE" --profile "闷骚型" >/dev/null
 
 python3 - "$HEARTBEAT_FILE" <<'PY'
 from pathlib import Path
@@ -17,9 +18,9 @@ import sys
 path = Path(sys.argv[1])
 block = """## openclaw_came_alive
 - 读取 skill: ~/.openclaw/workspace/skills/openclaw_came_alive/SKILL.md
-- 用 scripts/manage_state.py 做 state 初始化、precheck、成功/失败记账
-- 若 state 允许继续，再定位真实用户会话、读取最近上下文、提取 signal、生成 candidate
-- 用 scripts/quality_gate.py 检查 candidate；不过关则不发
+- 用 scripts/manage_state.py 做 state 初始化、style_profile、trace 管理与冲动选择
+- 只有近期上下文里真的有余味，才 upsert trace；没有就安静退出
+- 用 scripts/quality_gate.py 只做废话淘汰，不做机械式多层审核
 - 发送时必须显式投递到真实用户会话，不使用 heartbeat 默认回投目标
 """
 if not path.exists():
