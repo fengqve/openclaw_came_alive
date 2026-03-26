@@ -7,36 +7,15 @@ import time
 import uuid
 from pathlib import Path
 
-PROFILES = {
-    "惜墨如金型": {
-        "threshold": 0.74,
-        "cooldown_min": 90,
-        "cooldown_max": 240,
-        "freshness_hours": 30,
-    },
-    "闷骚型": {
-        "threshold": 0.62,
-        "cooldown_min": 45,
-        "cooldown_max": 150,
-        "freshness_hours": 24,
-    },
-    "正常人型": {
-        "threshold": 0.52,
-        "cooldown_min": 20,
-        "cooldown_max": 90,
-        "freshness_hours": 18,
-    },
-    "话痨型": {
-        "threshold": 0.40,
-        "cooldown_min": 8,
-        "cooldown_max": 45,
-        "freshness_hours": 12,
-    },
+CONFIG = {
+    "impulse_threshold": 0.58,
+    "cooldown_min": 25,
+    "cooldown_max": 110,
+    "freshness_hours": 20,
 }
 
 DEFAULT_STATE = {
     "enabled": False,
-    "style_profile": "闷骚型",
     "last_emit_ts": 0,
     "cooldown_until": 0,
     "traces": [],
@@ -59,8 +38,6 @@ def load_state(path: Path) -> dict:
     state = DEFAULT_STATE.copy()
     if isinstance(data, dict):
         state.update({k: v for k, v in data.items() if k in state})
-    if state.get("style_profile") not in PROFILES:
-        state["style_profile"] = DEFAULT_STATE["style_profile"]
     if not isinstance(state.get("traces"), list):
         state["traces"] = []
     return state
@@ -151,16 +128,6 @@ def cmd_deactivate(path: Path):
     return {"ok": True, "state": state}
 
 
-def cmd_set_style(path: Path, profile: str):
-    state = load_state(path)
-    prune_and_decay_traces(state)
-    if profile not in PROFILES:
-        return {"ok": False, "error": "unknown_profile", "allowed": list(PROFILES.keys())}
-    state["style_profile"] = profile
-    save_state(path, state)
-    return {"ok": True, "state": state}
-
-
 def cmd_precheck(path: Path):
     state = load_state(path)
     prune_and_decay_traces(state)
@@ -178,7 +145,7 @@ def cmd_precheck(path: Path):
         "should_consider": len([r for r in reasons if r not in {"no_live_traces"}]) == 0,
         "reasons": reasons,
         "state": state,
-        "profiles": list(PROFILES.keys()),
+        "config": CONFIG,
     }
 
 
@@ -218,10 +185,10 @@ def cmd_upsert_trace(path: Path, theme: str, kind: str, weight: float):
     return {"ok": True, "state": state}
 
 
-def impulse_score(trace: dict, profile: dict, quietness: float = 1.0) -> float:
+def impulse_score(trace: dict, quietness: float = 1.0) -> float:
     now = now_ms()
     age_hours = max(0.0, (now - int(trace.get("touched_ts", now))) / 3600000)
-    freshness = math.exp(-age_hours / max(profile["freshness_hours"], 1))
+    freshness = math.exp(-age_hours / max(CONFIG["freshness_hours"], 1))
     stochasticity = random.uniform(0.82, 1.18)
     base = float(trace.get("weight", 0.2)) * freshness * clamp(quietness, 0.4, 1.2)
     return base * stochasticity
@@ -230,19 +197,16 @@ def impulse_score(trace: dict, profile: dict, quietness: float = 1.0) -> float:
 def cmd_choose_trace(path: Path, quietness: float):
     state = load_state(path)
     prune_and_decay_traces(state)
-    profile_name = state.get("style_profile", DEFAULT_STATE["style_profile"])
-    profile = PROFILES[profile_name]
-    threshold = profile["threshold"]
+    threshold = CONFIG["impulse_threshold"]
     scored = []
     for trace in state.get("traces", []):
-        score = impulse_score(trace, profile, quietness=quietness)
+        score = impulse_score(trace, quietness=quietness)
         scored.append({"trace": trace, "score": round(score, 4)})
     scored.sort(key=lambda x: x["score"], reverse=True)
     chosen = scored[0] if scored and scored[0]["score"] >= threshold else None
     save_state(path, state)
     return {
         "ok": True,
-        "style_profile": profile_name,
         "threshold": threshold,
         "quietness": quietness,
         "chosen": chosen,
@@ -254,14 +218,12 @@ def cmd_choose_trace(path: Path, quietness: float):
 def cmd_mark_sent(path: Path):
     state = load_state(path)
     prune_and_decay_traces(state)
-    profile = PROFILES[state.get("style_profile", DEFAULT_STATE["style_profile"])]
     now = now_ms()
-    cooldown_minutes = random.randint(profile["cooldown_min"], profile["cooldown_max"])
+    cooldown_minutes = random.randint(CONFIG["cooldown_min"], CONFIG["cooldown_max"])
     state["last_emit_ts"] = now
     state["cooldown_until"] = now + cooldown_minutes * 60 * 1000
     traces = state.get("traces", [])
     if traces:
-        # soften the top trace rather than deleting everything
         top = dict(traces[0])
         top["weight"] = round(max(0.0, float(top.get("weight", 0.3)) * 0.42), 4)
         top["touched_ts"] = now
@@ -285,7 +247,7 @@ def cmd_inspect(path: Path):
     state = load_state(path)
     prune_and_decay_traces(state)
     save_state(path, state)
-    return {"ok": True, "state": state, "profiles": PROFILES}
+    return {"ok": True, "state": state, "config": CONFIG}
 
 
 def main():
@@ -296,7 +258,6 @@ def main():
             "init",
             "activate",
             "deactivate",
-            "set-style",
             "precheck",
             "upsert-trace",
             "choose-trace",
@@ -306,7 +267,6 @@ def main():
         ],
     )
     parser.add_argument("--state", required=True)
-    parser.add_argument("--profile")
     parser.add_argument("--theme")
     parser.add_argument("--kind")
     parser.add_argument("--weight", type=float, default=0.46)
@@ -321,8 +281,6 @@ def main():
         result = cmd_activate(path)
     elif args.command == "deactivate":
         result = cmd_deactivate(path)
-    elif args.command == "set-style":
-        result = cmd_set_style(path, args.profile or DEFAULT_STATE["style_profile"])
     elif args.command == "precheck":
         result = cmd_precheck(path)
     elif args.command == "upsert-trace":
