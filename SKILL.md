@@ -15,6 +15,24 @@ description: |
 在每次 heartbeat 时运行。它的目标不是“随机说一句话”，而是：
 **只有在系统空闲、且近期上下文里确实残留了一个自然可说的念头时，才低频冒出一句像这个 agent 自己会说的话。**
 
+## Bundled scripts
+
+- `scripts/manage_state.py`
+  - 初始化 state
+  - 激活 / 禁用
+  - 做 precheck（enabled / cooldown / daily limit）
+  - 在发送成功后记账，在发送失败后保持计数不变
+- `scripts/quality_gate.py`
+  - 对 candidate 做第一层硬门禁
+  - 拦截明显不合格的输出：语气词、半截话、空泛钩子、纯省略号、问题句等
+- `scripts/activate.sh`
+  - 初始化 state
+  - 激活 skill
+  - 把 heartbeat 所需调用说明补进 `HEARTBEAT.md`
+- `scripts/deactivate.sh`
+  - 禁用 skill
+  - 从 `HEARTBEAT.md` 中移除相关段落
+
 ## State 管理
 
 在 `memory/openclaw_came_alive_state.json` 中维护状态：
@@ -28,12 +46,6 @@ description: |
   "today_date": "2026-03-26"
 }
 ```
-
-- `enabled`: false 表示未激活，true 表示已激活
-- `last_emit_ts`: 最近一次成功发出后念的时间
-- `cooldown_until`: 冷却结束时间；未结束前禁止再次主动冒泡
-- `today_emit_count`: 当天已发次数
-- `today_date`: 当前计数所属日期
 
 兼容说明：旧版可能留下 `residues`、`presence_pressure` 等字段；**第一版不依赖它们做发言决策**，可保留但不使用。
 
@@ -57,21 +69,57 @@ description: |
 5. **不索取回复**
    - 后念可以引发继续对话，但不能通过半截话、钩子话术或装神秘逼对方追问。
 
-## 触发前提
+## heartbeat 工作流
 
-仅在以下条件都成立时，才允许进入“是否值得发言”的判断：
+每次 heartbeat 命中此 skill 时，按这个顺序执行：
 
-1. 当前没有 active task
-2. 最近一个 heartbeat 周期内没有新的用户消息
-3. 冷却时间已结束
-4. 当天 emit 次数未超限
-5. 当前时段适合轻量主动冒泡；若明显属于安静/休息时段，默认更克制
+1. **先跑 state precheck**
+   - 用 `scripts/manage_state.py precheck`
+   - 若返回 disabled / cooldown active / daily limit reached，则立即退出
 
-若任一条件不满足：**立即退出，不发言。**
+2. **再判断当前是否适合主动冒泡**
+   - 确认当前没有 active task
+   - 确认最近一个 heartbeat 周期内没有新的用户消息
+   - 若明显属于安静/休息时段，默认更克制
+
+3. **定位真实用户会话**
+   - 不要把 heartbeat 会话当成最终投递目标
+   - 先通过 `sessions_list` 找到最近真实聊天会话（direct chat / 主会话）
+   - 后续读取上下文、发送消息，都以那个真实会话为准
+
+4. **读取最近上下文**
+   - 读取目标会话最近一小段消息即可，不做全量回溯
+   - 默认看最近 3-8 条、最近一次 user ↔ assistant 往返、最近一个明确主题、最近一个尚有余味的点、当前主要语言、当前气氛
+
+5. **判断有没有足够 signal**
+   - 如果最近没有明确主题
+   - 如果主题已经完全收束
+   - 如果上下文太薄，提取不到具体点
+   - 如果当前场景明显不适合打扰
+   - **则不发**
+
+6. **生成 candidate**
+   - 依据最近上下文 + 当前 agent 的 `SOUL.md` + 当前语言生成一句后念
+   - 不是摘要，不是客服话术，也不是“为了活人感硬说一句”
+
+7. **过质量门禁**
+   - 先用 `scripts/quality_gate.py` 做硬门禁
+   - 再结合语义判断：是否完整、可理解、自然、像这个 agent 自己会说的话
+   - 不过关则不发
+
+8. **显式投递到真实用户会话**
+   - 优先用 `sessions_send` 发到目标会话
+   - 或者显式使用 `message(action=send)` + 真实 `channel/target/accountId`
+   - **禁止依赖 heartbeat 当前上下文默认回投**，否则容易发向错误目标
+
+9. **成功/失败后更新 state**
+   - 成功：用 `scripts/manage_state.py mark-sent`
+   - 失败：用 `scripts/manage_state.py mark-failed`
+   - 发送失败不应记作成功 emit
 
 ## 上下文读取策略
 
-在决定是否生成后念前，读取最近一小段对话上下文即可，不做全量回溯。
+只需要读取最近一小段上下文，不做全量回溯。
 
 默认关注：
 - 最近 3-8 条消息
@@ -80,14 +128,6 @@ description: |
 - 最近一个尚有“余味”的点：补充、修正、延伸、迟来的想到
 - 当前主要语言
 - 当前对话气氛是否适合主动冒泡
-
-若读取后发现：
-- 最近没有明确主题
-- 主题已经完全收束
-- 上下文太薄，提取不到具体点
-- 当前场景明显不适合打扰
-
-则：**不发。**
 
 ## 后念应当是什么
 
@@ -106,7 +146,7 @@ description: |
 
 ## 质量门禁
 
-生成后，必须再过一次质量门禁。命中任一项都**不得发送**：
+命中任一项都**不得发送**：
 
 1. **只有语气，没有内容**
    - 如：`哎。`、`嗯。`、`喔。`
@@ -128,9 +168,13 @@ description: |
 6. **明显在诱导追问**
    - 通过残缺表达逼对方接话
 
+7. **问题句 / 索取回复**
+   - 不要主动问问题
+   - 不要通过句式把压力抛回给对方
+
 ## 语言与风格
 
-- **语言**：跟随当前 session 的主要语言，不强制中文
+- **语言**：跟随当前目标会话的主要语言，不强制中文
 - **视角**：以 agent 自己的角度说，不模仿用户
 - **风格**：符合 `SOUL.md`，优先自然、克制、具体
 - **长度**：保持短，但不要为了短而残缺；如果一句话说不完整，就不发
@@ -169,9 +213,9 @@ description: |
 - `activate came_alive`
 
 激活时：
-1. 读取 `memory/openclaw_came_alive_state.json`
-2. 设置 `enabled: true`
-3. 若 `HEARTBEAT.md` 中不存在该技能段落，则追加注册说明
+1. 运行 `scripts/activate.sh`
+2. 确认 state 已 `enabled: true`
+3. 确认 `HEARTBEAT.md` 已包含本 skill 所需段落
 4. 回复用户：`活人感已开启，我会偶尔在你安静时冒个泡 🫧`
 
 ### 禁用
@@ -181,14 +225,14 @@ description: |
 - `turn off alive mode`
 
 禁用时：
-1. 读取 state，设置 `enabled: false`
-2. 从 `HEARTBEAT.md` 中移除相关段落
-3. 回复用户：`活人感已关闭`
+1. 运行 `scripts/deactivate.sh`
+2. 确认 state 已 `enabled: false`
+3. 确认 `HEARTBEAT.md` 已移除相关段落
+4. 回复用户：`活人感已关闭`
 
 ## 实现边界
 
-- `SKILL.md` 只定义行为原则、读取边界、质量门禁与约束
-- 若未来需要把具体实现固化成可执行逻辑，放入 `scripts/`，不要把大量代码或实现细节堆进 `SKILL.md`
-- 通过 `message(action=send)` 发送，禁止旁路
+- `SKILL.md` 只定义行为原则、读取边界、质量门禁与调用顺序
+- 具体执行细节收敛在 `scripts/`
+- 通过真实用户会话投递，避免 heartbeat 假目标
 - 只使用 OpenClaw 现有 heartbeat，不新增 cron job
-- 发送失败不应记作成功 emit
