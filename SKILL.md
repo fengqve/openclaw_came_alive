@@ -97,10 +97,13 @@ heartbeat 不负责“强行发消息”，只负责问一句：
 
 每次 heartbeat 命中此 skill 时，按这个顺序执行：
 
+> **两阶段原则：先生成/刷新 trace，再消费 trace。**
+> 不要在 trace 池为空时提前退出——context 检查后才能判断是否值得生成痕迹。
+
 1. **先跑 state precheck**
    - 用 `scripts/manage_state.py precheck`
    - 若返回 disabled / cooldown active，则立即退出
-   - 若没有 live traces，也可以直接静默退出
+   - **若只有 no_live_traces，继续执行**（进入步骤 4–5，尝试从上下文生成痕迹）
 
 2. **再判断当前是否适合主动冒泡**
    - 确认当前没有 active task
