@@ -23,7 +23,7 @@ block = f"""## openclaw_came_alive
 - 用 `{state_tool}` 做 state 初始化、trace 管理与冲动选择
 - 用 `{quality_gate}` 只做废话淘汰，不做机械式多层审核
 - 按 skill 里的 heartbeat 工作流完整执行：precheck → 定位真实用户会话 → 读取上下文 → 必要时 upsert trace → choose-trace → 生成 candidate → quality gate → 显式发送
-- 若只是 quiet hours / no_live_traces / 没有 candidate，不代表可提前跳过整个 came_alive 流程；只有完整跑完后仍无事可发，才返回 `HEARTBEAT_OK`
+- **严禁在完整流程跑完之前返回 `HEARTBEAT_OK`**；quiet hours / no_live_traces / 没有 candidate 只是「流程跑完后无输出」的理由，不是提前退出的理由
 - 发送时必须显式投递到真实用户会话，不使用 heartbeat 默认回投目标；只有真实发送成功后，才能 mark-sent
 """
 if not heartbeat_path.exists():

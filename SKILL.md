@@ -110,6 +110,7 @@ heartbeat 不负责“强行发消息”，只负责问一句：
    - 确认当前没有 active task
    - 确认最近一个 heartbeat 周期内没有新的用户消息
    - 若明显属于安静/休息时段，默认更克制
+   - **注意**：「更克制」不代表可以提前跳过后续步骤；走完 came_alive 全流程后再决定是否发送，是唯一正确路径
 
 3. **定位真实用户会话**
    - 不要把 heartbeat 会话当成最终投递目标
@@ -144,6 +145,8 @@ heartbeat 不负责“强行发消息”，只负责问一句：
    - 禁止依赖 heartbeat 当前上下文默认回投
 
 10. **成功/失败后更新 state**
+    - **只有消息真正送达用户会话并可被用户看见时，才能 mark-sent**
+    - 若 Telegram API 返回 OK 但无法确认用户可见（例如 session 断线、投递到错误 target），不 mark-sent，应 mark-failed
     - 成功：`scripts/manage_state.py mark-sent`
     - 失败：`scripts/manage_state.py mark-failed`
     - 发送失败不应记作成功 emit
