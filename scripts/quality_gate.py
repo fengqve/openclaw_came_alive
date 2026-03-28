@@ -36,6 +36,26 @@ _META_PATTERNS = [
     (re.compile(r'这次.+.改得值'), "meta_change_summary_short"),
 ]
 
+# Anti-vague-reference guard: reject sentences where the subject/topic reference
+# is so unspecified that a normal reader cannot tell what it refers to.
+# "刚才你说的那个点还挺有意思的" ← reader has no idea which point.
+_VAGUE_PATTERNS = [
+    (re.compile(r'^说起来.*还挺有意思的'), "vague_no_topic"),
+    (re.compile(r'^说起来.*那个点'), "vague_point"),
+    (re.compile(r'^说起来.*这个点'), "vague_point"),
+    (re.compile(r'^说起来.*那件事'), "vague_thing"),
+    (re.compile(r'^说起来.*这件事'), "vague_thing"),
+    (re.compile(r'^刚才.*那个点'), "vague_point"),
+    (re.compile(r'^刚才.*这个点'), "vague_point"),
+    (re.compile(r'^刚才.*那件事'), "vague_thing"),
+    (re.compile(r'^刚才.*这件事'), "vague_thing"),
+    (re.compile(r'^那个点'), "vague_standalone"),
+    (re.compile(r'^这个点'), "vague_standalone"),
+    (re.compile(r'^那件事'), "vague_standalone"),
+    (re.compile(r'^这件事'), "vague_standalone"),
+    (re.compile(r'^嗯+.*', re.IGNORECASE), "vague_acknowledgement"),
+]
+
 BANNED_PREFIXES = ["对了", "算了", "突然想到", "话说回来"]
 ELLIPSIS_RE = re.compile(r'^[\.。…\s]+$')
 PUNCT_ONLY_RE = re.compile(r'^[\s\.,!?，。！？…:：;；\-—~`]+$')
@@ -84,6 +104,13 @@ def analyze(text: str):
 
     # Meta/tooling language gate — reject internal status reports
     for pattern, label in _META_PATTERNS:
+        if pattern.search(text):
+            reasons.append(label)
+            break
+
+    # Vague-reference gate — reject sentences where the reader cannot determine
+    # what is being referenced. Allows slightly ambiguous but not unresolvably vague.
+    for pattern, label in _VAGUE_PATTERNS:
         if pattern.search(text):
             reasons.append(label)
             break
