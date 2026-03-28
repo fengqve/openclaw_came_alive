@@ -65,7 +65,42 @@ _VAGUE_PATTERNS = [
     (re.compile(r'^嗯+.*', re.IGNORECASE), "vague_acknowledgement"),
 ]
 
-BANNED_PREFIXES = ["对了", "算了", "突然想到", "话说回来"]
+# Anti-synthetic / anti-over-polish: catch sentences that feel engineered
+# rather than raw. A genuine lingering thought should have some rawness:
+# slight incompleteness, asymmetry, or "cut off mid-thought" quality.
+# Not every neat sentence is synthetic — but fully symmetric, perfectly
+# concluded, structurally over-optimised sentences almost always are.
+_SYNTHETIC_PATTERNS = [
+    # Fully symmetric 4-char parallel: "A，B，C" or "X和Y和Z"
+    # Captures the "1-2-3 list" feel that signals considered composition.
+    (re.compile(r'^[\u4e00-\u9fff]{1,4}，[\u4e00-\u9fff]{1,4}，[\u4e00-\u9fff]{1,4}$'), "synthetic_triple_balance"),
+    # Perfectly matched "虽然X，但Y" or "虽然X，不过Y" — too deliberate a contrast.
+    (re.compile(r'^虽然[\u4e00-\u9fff]+，不过[\u4e00-\u9fff]+'), "synthetic_although_but"),
+    (re.compile(r'^虽然[\u4e00-\u9fff]+，但[\u4e00-\u9fff]+'), "synthetic_although_but"),
+    # "值得想想/值得研究/值得考虑" — evaluative closure that signals a complete answer
+    # rather than an open-ended lingering thought.
+    (re.compile(r'值得(想想|研究|考虑|再想想)$'), "synthetic_evaluative_close"),
+    # Mid-sentence self-correction markers: signal the sentence was refined/edited.
+    # Genuine thoughts don't say "不对，算了" — they trail off or move on.
+    (re.compile(r'^不对[,，]'), "synthetic_self_correct"),
+    (re.compile(r'^等等[,，]'), "synthetic_self_correct"),
+    (re.compile(r'^等等[,，]不对'), "synthetic_self_correct"),
+    # "一时.*一时" — repeated "一时" signals rhetorical construction.
+    (re.compile(r'一时.+一时'), "synthetic_repeated_temporal"),
+    # Sentences ending in a neat conclusion that closes the thought completely:
+    # a fully stated conclusion without any "leftover" feel.
+    # Patterns: "……的结论" / "……的结果" / "……的判断" ending the sentence.
+    (re.compile(r'[\u4e00-\u9fff]+的结论$'), "synthetic_neat_conclusion"),
+    (re.compile(r'[\u4e00-\u9fff]+的结果$'), "synthetic_neat_conclusion"),
+    (re.compile(r'[\u4e00-\u9fff]+的判断$'), "synthetic_neat_conclusion"),
+]
+
+# Hard-banned prefixes — any sentence starting with these is rejected regardless
+# of tail length. These lead-ins are tell-tale canned/thought-skipping markers.
+BANNED_PREFIXES_HARD = ["对了", "突然想到"]
+# Soft-banned prefixes — rejected only when the remaining tail is too short
+# to form a substantive thought on its own.
+BANNED_PREFIXES_SOFT = ["算了", "话说回来"]
 ELLIPSIS_RE = re.compile(r'^[\.。…\s]+$')
 PUNCT_ONLY_RE = re.compile(r'^[\s\.,!?，。！？…:：;；\-—~`]+$')
 QUESTION_RE = re.compile(r'[?？]')
@@ -96,12 +131,17 @@ def analyze(text: str):
     if len(text) > 60:
         reasons.append("too_long")
 
-    for prefix in BANNED_PREFIXES:
+    for prefix in BANNED_PREFIXES_HARD:
         if text.startswith(prefix):
-            tail = text[len(prefix):].strip(" 。.!！?？…，,：:")
-            if len(tail) < 4:
-                reasons.append("dangling_prefix")
-                break
+            reasons.append("banned_prefix")
+            break
+    if "banned_prefix" not in reasons:
+        for prefix in BANNED_PREFIXES_SOFT:
+            if text.startswith(prefix):
+                tail = text[len(prefix):].strip(" 。.!！?？…，,：:")
+                if len(tail) < 4:
+                    reasons.append("dangling_prefix")
+                    break
 
     tokens = re.findall(r'[A-Za-z]+|[\u4e00-\u9fff]+', text)
     if len(tokens) == 1 and len(tokens[0]) <= 2 and len(text) <= 4:
@@ -120,6 +160,14 @@ def analyze(text: str):
     # Vague-reference gate — reject sentences where the reader cannot determine
     # what is being referenced. Allows slightly ambiguous but not unresolvably vague.
     for pattern, label in _VAGUE_PATTERNS:
+        if pattern.search(text):
+            reasons.append(label)
+            break
+
+    # Anti-synthetic / anti-over-polish gate — reject sentences that feel
+    # engineered rather than raw. Catch: over-symmetry, over-conclusion,
+    # deliberate self-correction, triple-balance lists.
+    for pattern, label in _SYNTHETIC_PATTERNS:
         if pattern.search(text):
             reasons.append(label)
             break
