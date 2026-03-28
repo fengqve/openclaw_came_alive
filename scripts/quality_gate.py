@@ -104,6 +104,9 @@ BANNED_PREFIXES_SOFT = ["算了", "话说回来"]
 ELLIPSIS_RE = re.compile(r'^[\.。…\s]+$')
 PUNCT_ONLY_RE = re.compile(r'^[\s\.,!?，。！？…:：;；\-—~`]+$')
 QUESTION_RE = re.compile(r'[?？]')
+# Keep a broad upper bound to block runaway paragraphs only.
+# Length itself should not force brevity: short/long are both valid if natural.
+MAX_NATURAL_LENGTH = 220
 OLD_CANNED_FLAVOR = [
     "刚才那个问题有点意思",
     "想到个事儿",
@@ -128,7 +131,7 @@ def analyze(text: str):
         reasons.append("asks_question")
     if len(text) <= 2 and not re.search(r'[A-Za-z0-9\u4e00-\u9fff]{2,}', text):
         reasons.append("too_thin")
-    if len(text) > 60:
+    if len(text) > MAX_NATURAL_LENGTH:
         reasons.append("too_long")
 
     for prefix in BANNED_PREFIXES_HARD:
