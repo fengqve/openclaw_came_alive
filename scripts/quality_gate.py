@@ -3,6 +3,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 
 BANNED_EXACT = {
     "哎", "哎。", "嗯", "嗯。", "喔", "喔。", "哦", "哦。",
@@ -104,14 +105,96 @@ BANNED_PREFIXES_SOFT = ["算了", "话说回来"]
 ELLIPSIS_RE = re.compile(r'^[\.。…\s]+$')
 PUNCT_ONLY_RE = re.compile(r'^[\s\.,!?，。！？…:：;；\-—~`]+$')
 QUESTION_RE = re.compile(r'[?？]')
-# Keep a broad upper bound to block runaway paragraphs only.
-# Length itself should not force brevity: short/long are both valid if natural.
-MAX_NATURAL_LENGTH = 220
+
+# Language/read-time-aware length budget.
+MAX_CHINESE_CHARS = 390
+MAX_ENGLISH_WORDS = 208
+MAX_OTHER_READ_SECONDS = 47.0
+ZH_CHARS_PER_SECOND = MAX_CHINESE_CHARS / MAX_OTHER_READ_SECONDS
+EN_WORDS_PER_SECOND = MAX_ENGLISH_WORDS / MAX_OTHER_READ_SECONDS
+
+CJK_RE = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]')
+KANA_HANGUL_RE = re.compile(r'[\u3040-\u30ff\uac00-\ud7af\u1100-\u11ff]')
+EN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’\-][A-Za-z]+)?")
+LATIN_LETTER_RE = re.compile(r'[A-Za-z]')
+UNICODE_WORD_RE = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*", re.UNICODE)
+
 OLD_CANNED_FLAVOR = [
     "刚才那个问题有点意思",
     "想到个事儿",
     "想起来一个点",
 ]
+
+
+def _count_readable_chars(text: str) -> int:
+    """
+    Count readable units for length estimation:
+    keep letters/numbers, drop whitespace and punctuation/symbol noise.
+    """
+    count = 0
+    for ch in text:
+        if ch.isspace():
+            continue
+        cat = unicodedata.category(ch)
+        if cat.startswith("P") or cat.startswith("S"):
+            continue
+        count += 1
+    return count
+
+
+def _estimate_other_read_seconds(text: str, readable_chars: int) -> float:
+    """
+    Heuristic for non-Chinese/non-English scripts:
+    - space-delimited writing systems: estimate by word rate
+    - non-space-delimited scripts: estimate by readable chars
+    """
+    unicode_words = len(UNICODE_WORD_RE.findall(text))
+    has_space = bool(re.search(r'\s', text))
+    if has_space and unicode_words > 0:
+        return unicode_words / EN_WORDS_PER_SECOND
+    return readable_chars / ZH_CHARS_PER_SECOND
+
+
+def _is_too_long(text: str) -> bool:
+    """
+    Length gate policy:
+    - Chinese-dominant text: <= 390 CJK chars
+    - English-dominant text: <= 208 English words
+    - Other scripts: estimated read time <= ~47 seconds
+
+    Keep detection simple/explainable (ratio-based, no heavy language model).
+    """
+    readable_chars = _count_readable_chars(text)
+    if readable_chars == 0:
+        return False
+
+    zh_chars = len(CJK_RE.findall(text))
+    kana_hangul_chars = len(KANA_HANGUL_RE.findall(text))
+    en_words = len(EN_WORD_RE.findall(text))
+    latin_letters = len(LATIN_LETTER_RE.findall(text))
+
+    zh_ratio = zh_chars / readable_chars
+    latin_ratio = latin_letters / readable_chars
+
+    is_chinese_dominant = (
+        zh_chars > 0
+        and kana_hangul_chars == 0
+        and zh_ratio >= 0.55
+    )
+    if is_chinese_dominant:
+        return zh_chars > MAX_CHINESE_CHARS
+
+    is_english_dominant = (
+        en_words > 0
+        and zh_chars == 0
+        and kana_hangul_chars == 0
+        and latin_ratio >= 0.55
+    )
+    if is_english_dominant:
+        return en_words > MAX_ENGLISH_WORDS
+
+    read_seconds = _estimate_other_read_seconds(text, readable_chars)
+    return read_seconds > MAX_OTHER_READ_SECONDS
 
 
 def analyze(text: str):
@@ -131,7 +214,7 @@ def analyze(text: str):
         reasons.append("asks_question")
     if len(text) <= 2 and not re.search(r'[A-Za-z0-9\u4e00-\u9fff]{2,}', text):
         reasons.append("too_thin")
-    if len(text) > MAX_NATURAL_LENGTH:
+    if _is_too_long(text):
         reasons.append("too_long")
 
     for prefix in BANNED_PREFIXES_HARD:
