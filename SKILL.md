@@ -30,6 +30,7 @@ description: |
   - 初始化 state
   - 激活 skill
   - 把 heartbeat 所需调用说明补进 `HEARTBEAT.md`
+  - 写入绝对路径与完整执行顺序，避免激活后只留下模糊相对路径或被 heartbeat 提前短路
 - `scripts/deactivate.sh`
   - 禁用 skill
   - 从 `HEARTBEAT.md` 中移除相关段落
