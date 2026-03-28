@@ -17,6 +17,25 @@ BANNED_EXACT = {
     "刚才说的那个，我回去翻了翻。",
 }
 
+# Anti-meta guard: reject messages that sound like internal tool status reports
+# rather than natural human-readable thoughts.
+# Pattern: describe_flag(pattern, label)
+_META_PATTERNS = [
+    (re.compile(r'delivery\s*guard', re.IGNORECASE), "meta_delivery_guard"),
+    (re.compile(r'mark[- ]?sent', re.IGNORECASE), "meta_mark_sent"),
+    (re.compile(r'verify|verification|verified', re.IGNORECASE), "meta_verify"),
+    (re.compile(r'发之前|发送前|发送时|发送后'), "meta_send_timing"),
+    (re.compile(r'(这次|刚才|刚刚)(改|改动|修改|调整|更新|改动)'), "meta_change_summary"),
+    (re.compile(r'(刚才|刚刚)?(技术|实现|机制|原理|架构)'), "meta_technical"),
+    (re.compile(r'trace|impulse|cooldown|weight|freshness', re.IGNORECASE), "meta_skill_internal"),
+    (re.compile(r'heartbeat|came_alive|活人感'), "meta_skill_name"),
+    (re.compile(r'验证|校验|检查了一遍|确认'), "meta_verify_cn"),
+    (re.compile(r'(功能|特性)改得值'), "meta_value_claim"),
+    # Sentences that are clearly about internal process rather than a natural thought
+    (re.compile(r'^.*(guard|mark[- ]?sent|delivery|发送|发送前|发送后).*$'), "meta_contains_tooling"),
+    (re.compile(r'这次.+.改得值'), "meta_change_summary_short"),
+]
+
 BANNED_PREFIXES = ["对了", "算了", "突然想到", "话说回来"]
 ELLIPSIS_RE = re.compile(r'^[\.。…\s]+$')
 PUNCT_ONLY_RE = re.compile(r'^[\s\.,!?，。！？…:：;；\-—~`]+$')
@@ -62,6 +81,12 @@ def analyze(text: str):
     lowered = text.replace("。", "").replace("！", "").replace("？", "")
     if any(s in lowered for s in OLD_CANNED_FLAVOR):
         reasons.append("old_canned_flavor")
+
+    # Meta/tooling language gate — reject internal status reports
+    for pattern, label in _META_PATTERNS:
+        if pattern.search(text):
+            reasons.append(label)
+            break
 
     ok = len(set(reasons)) == 0
     return {

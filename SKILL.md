@@ -1,8 +1,8 @@
 ---
 name: openclaw_came_alive
 description: |
-  让 OpenClaw 在系统空闲时，以更像“脑内残响”的方式偶尔主动冒出一句短的后念，
-  产生“像活人一样仍然存在”的感觉。
+  让 OpenClaw 在系统空闲时，以更像"脑内残响"的方式偶尔主动冒出一句短的后念，
+  产生"像活人一样仍然存在"的感觉。
   激活入口（自然语言或多语言）：
     - 中文：开启活人感、启用活人感、打开活人感
     - 英文：turn on alive mode, enable alive mode, activate came_alive
@@ -12,7 +12,7 @@ description: |
 
 # openclaw_came_alive
 
-目标不是“随机发一句话”，也不是“按数字配额吐句子”。
+目标不是"随机发一句话"，也不是"按数字配额吐句子"。
 目标是：
 **当系统空闲、且近期对话里确实残留了一个还没散掉的念头时，才自然冒出一句像这个 agent 自己会说的话。**
 
@@ -39,7 +39,7 @@ description: |
 
 ### trace（痕迹）
 
-不要保存“候选句子”，只保存最近仍有余味的 1~3 个轻痕迹。
+不要保存"候选句子"，只保存最近仍有余味的 1~3 个轻痕迹。
 
 每条 trace 只保留最少信息：
 - `theme`：话题是什么
@@ -64,7 +64,7 @@ trace 会：
 
 ### impulse（表达冲动）
 
-heartbeat 不负责“强行发消息”，只负责问一句：
+heartbeat 不负责"强行发消息"，只负责问一句：
 
 > 现在脑子里还有没有哪个 trace 活着，甚至值得说一句？
 
@@ -82,7 +82,7 @@ heartbeat 不负责“强行发消息”，只负责问一句：
 
 ## 当前原则：先去掉档位，别让配置感抢戏
 
-当前版本先不对外暴露任何“人格档位”或“频率档位”。
+当前版本先不对外暴露任何"人格档位"或"频率档位"。
 
 原因：
 - 现在优先体验她自然说话的感觉
@@ -99,12 +99,12 @@ heartbeat 不负责“强行发消息”，只负责问一句：
 每次 heartbeat 命中此 skill 时，按这个顺序执行：
 
 > **两阶段原则：先生成/刷新 trace，再消费 trace。**
-> 不要在 trace 池为空时提前退出——context 检查后才能判断是否值得生成痕迹。
+> 不要在 trace 池为空时提前退出--context 检查后才能判断是否值得生成痕迹。
 
 1. **先跑 state precheck**
    - 用 `scripts/manage_state.py precheck`
    - 若返回 disabled / cooldown active，则立即退出
-   - **若只有 no_live_traces，继续执行**（进入步骤 4–5，尝试从上下文生成痕迹）
+   - **若只有 no_live_traces，继续执行**（进入步骤 4-5，尝试从上下文生成痕迹）
 
 2. **再判断当前是否适合主动冒泡**
    - 确认当前没有 active task
@@ -122,9 +122,11 @@ heartbeat 不负责“强行发消息”，只负责问一句：
    - 默认看最近 3-8 条、最近一次 user ↔ assistant 往返、最近一个明确主题、最近一个尚有余味的点、当前主要语言、当前气氛
 
 5. **从上下文提取或更新 trace**
-   - 只有确实有“没完全散掉”的点时，才写入 trace
+   - 只有确实有"没完全散掉"的点时，才写入 trace
    - 用 `scripts/manage_state.py upsert-trace` 更新 trace 池
-   - 不要为了“保持活着”硬造 trace
+   - 不要为了"保持活着"硬造 trace
+   - **trace theme 必须是人类可理解的话题**：应该是"用户问的某个问题"、"某个有趣的观点"、"某个想补充的点"，而不是"delivery guard 改动"、"mark-sent 验证逻辑"这类实现层描述
+   - 如果上下文里的"余味"本质是技术实现细节而非可分享的个人感想，不写入 trace
 
 6. **让 state 选择当前最值得说的 trace**
    - 用 `scripts/manage_state.py choose-trace`
@@ -133,27 +135,44 @@ heartbeat 不负责“强行发消息”，只负责问一句：
 7. **生成 candidate**
    - 依据：当前最强 trace + 最近很小一段上下文 + 当前 agent 的 `SOUL.md` + 当前语言
    - 原则：如果能自然地说出一句完整、可理解、像自己会说的话，就说；说不出来就不说
+   - **禁止在候选句子里出现以下内容**（生成时主动回避，过不了质量门禁）：
+     - 提及内部工具名字：delivery guard、mark-sent、trace、impulse、cooldown、heartbeat、活人感
+     - 描述实现细节：验证消息、检查、确认、技术、实现、机制
+     - 描述发送时机：发之前、发送前、发送后
+     - 以"这次 XXX 改得值/改动"开头的技术总结句式
+     - 任何听起来像内部状态报告或技术 changelog 的话
+   - **生成示例指导**：后念应该是"我刚才想到……"、"对了那个……"、"其实我觉得……"这类自然的个人感想，而不是"这次 delivery guard 改得值"这种工程进度汇报
 
 8. **过轻门禁**
    - 用 `scripts/quality_gate.py` 只做废话淘汰
    - 不做多层机械审核
    - 保留表达自由，只消灭废话
 
-9. **显式投递到真实用户会话**
-   - 优先用 `sessions_send` 发到目标会话
-   - 或显式使用 `message(action=send)` + 真实 `channel/target/accountId`
-   - 禁止依赖 heartbeat 当前上下文默认回投
+9. **显式投递到真实用户会话（必须用 deliver.py）**
+   - **必须**通过 `scripts/deliver.py` 发送，这条是代码级强制，不是可选项：
+     ```bash
+     python3 scripts/deliver.py \
+       --text "生成好的候选句子" \
+       --chat-id <目标 chat_id（来自 sessions_list 或已知用户 Telegram ID）> \
+       --bot-token <Telegram bot token（来自 openclaw.json channels.telegram.botToken）> \
+       --state /Users/zhangyu/.openclaw/workspace/memory/openclaw_came_alive_state.json
+     ```
+   - `deliver.py` 会：
+     1. 调用 Telegram `sendMessage` API
+     2. 检查返回的 `message_id`（无 message_id → mark-failed，不 mark-sent）
+     3. 用 `getMessage` 轮询验证消息已进入目标会话（最多 3 次，1s/2s/3s 间隔）
+     4. **只有 sendMessage 成功才 mark-sent**；失败（网络、token、权限等）→ mark-failed
+   - **禁止**绕过 deliver.py 直接调用 `message(action=send)` 或 `sessions_send` 来投递 came_alive 消息
+   - 如果 deliver.py 因任何原因不可用，整个流程应以 mark-failed 退出，不应手动 mark-sent
 
 10. **成功/失败后更新 state**
-    - **只有消息真正送达用户会话并可被用户看见时，才能 mark-sent**
-    - 若 Telegram API 返回 OK 但无法确认用户可见（例如 session 断线、投递到错误 target），不 mark-sent，应 mark-failed
-    - 成功：`scripts/manage_state.py mark-sent`
-    - 失败：`scripts/manage_state.py mark-failed`
-    - 发送失败不应记作成功 emit
+    - **mark-sent 由 deliver.py 在发送成功后自动调用，禁止单独再调用**
+    - 如果 deliver.py 失败，其内部已调用 mark-failed，不需要再处理
+    - inspect 可查看最终状态：`scripts/manage_state.py inspect --state <state_path>`
 
 ## trace 写入原则
 
-只有在最近对话里确实出现“余味”时才写入 trace。
+只有在最近对话里确实出现"余味"时才写入 trace。
 
 ### 写入条件
 
@@ -168,7 +187,7 @@ heartbeat 不负责“强行发消息”，只负责问一句：
 - 纯事务性问答
 - 已完全收束的事情
 - 没有余味，只是完成了
-- 只是为了“保持活着”硬记一笔
+- 只是为了"保持活着"硬记一笔
 
 ## 后念应当是什么
 
@@ -177,7 +196,7 @@ heartbeat 不负责“强行发消息”，只负责问一句：
 - 符合 agent 本身风格
 - 简洁但完整
 - 不要求回复
-- 不依赖“下半句稍后再说”
+- 不依赖"下半句稍后再说"
 
 允许的类型：
 1. **补充型**：刚才某个点，后来又想到一个补充
