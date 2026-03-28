@@ -34,6 +34,15 @@ _META_PATTERNS = [
     # Sentences that are clearly about internal process rather than a natural thought
     (re.compile(r'^.*(guard|mark[- ]?sent|delivery|发送|发送前|发送后).*$'), "meta_contains_tooling"),
     (re.compile(r'这次.+.改得值'), "meta_change_summary_short"),
+    # Internal object leak: raw identifiers from scheduled tasks / search pipelines / filter steps
+    # must be translated to user-perspective language before use.
+    (re.compile(r'_crons?[\./][\w\-]+'), "meta_internal_scheduled_obj"),
+    (re.compile(r'scheduled[_-]?task[_-]?\w*', re.IGNORECASE), "meta_internal_scheduled_obj"),
+    (re.compile(r'search[_-]?pipeline[_-]?\w*', re.IGNORECASE), "meta_internal_search_obj"),
+    (re.compile(r'filter[_-]?step[_-]?\w*', re.IGNORECASE), "meta_internal_filter_obj"),
+    (re.compile(r'_filter[_\d]*\w*', re.IGNORECASE), "meta_internal_filter_obj"),
+    (re.compile(r'pipeline[_-]?\w{3,}', re.IGNORECASE), "meta_internal_pipeline"),
+    (re.compile(r'__\w+__(id|tag|label|key)', re.IGNORECASE), "meta_internal_dunder"),
 ]
 
 # Anti-vague-reference guard: reject sentences where the subject/topic reference
