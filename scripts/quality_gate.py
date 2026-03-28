@@ -125,6 +125,87 @@ OLD_CANNED_FLAVOR = [
     "想起来一个点",
 ]
 
+# Shared-memory grounding guard:
+# allow references to prior shared dialogue only when source context supports it.
+_SHARED_MEMORY_PATTERNS = [
+    (re.compile(r'你那句'), "shared_memory_claim"),
+    (re.compile(r'(你|咱们|我们).{0,10}(说过|讲过|提过|聊过)'), "shared_memory_claim"),
+    (re.compile(r'(还记得|想起|突然想起).{0,8}(你|咱们|我们).{0,10}(说|讲|提|聊)'), "shared_memory_claim"),
+    (re.compile(r'(刚才|之前|上次).{0,12}(你|咱们|我们).{0,10}(说|讲|提|聊)'), "shared_memory_claim"),
+]
+
+_QUOTED_SPAN_RE = re.compile(r'[“「『"‘]([^”」』"’\n]{2,80})[”」』"’]')
+_GROUND_TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
+_MEMORY_STOPWORDS = {
+    "你", "我们", "咱们", "刚才", "之前", "上次", "那句", "这句", "那句话", "这句话",
+    "说", "说过", "讲", "讲过", "提", "提过", "聊", "聊过", "想起", "记得",
+    "you", "we", "us", "before", "just", "said", "line", "quote",
+}
+
+
+def _normalize_for_match(text: str) -> str:
+    out = []
+    for ch in text:
+        if ch.isspace():
+            continue
+        cat = unicodedata.category(ch)
+        if cat.startswith("P") or cat.startswith("S"):
+            continue
+        out.append(ch.lower())
+    return "".join(out)
+
+
+def _extract_quoted_spans(text: str) -> list[str]:
+    return [m.group(1).strip() for m in _QUOTED_SPAN_RE.finditer(text or "") if m.group(1).strip()]
+
+
+def _ground_tokens(text: str) -> set[str]:
+    tokens = set()
+    for tok in _GROUND_TOKEN_RE.findall((text or "").lower()):
+        if not tok:
+            continue
+        if tok.isascii():
+            if len(tok) >= 2 and tok not in _MEMORY_STOPWORDS:
+                tokens.add(tok)
+            continue
+        # Chinese chunk: keep bigrams for softer overlap
+        if len(tok) <= 1:
+            continue
+        for i in range(len(tok) - 1):
+            bi = tok[i:i + 2]
+            if bi not in _MEMORY_STOPWORDS:
+                tokens.add(bi)
+    return tokens
+
+
+def _has_context_overlap(candidate: str, source_snippets: list[str], min_overlap: float = 0.18) -> bool:
+    cand = _ground_tokens(candidate)
+    if not cand:
+        return False
+    for snippet in source_snippets:
+        src = _ground_tokens(snippet)
+        if not src:
+            continue
+        overlap = len(cand & src) / max(1, min(len(cand), len(src), 8))
+        if overlap >= min_overlap:
+            return True
+    return False
+
+
+def _find_ungrounded_quote(quotes: list[str], source_snippets: list[str]) -> str | None:
+    if not quotes:
+        return None
+    normalized_sources = [_normalize_for_match(s) for s in source_snippets if (s or "").strip()]
+    if not normalized_sources:
+        return quotes[0]
+    for quote in quotes:
+        q = _normalize_for_match(quote)
+        if not q:
+            continue
+        if not any(q in src for src in normalized_sources):
+            return quote
+    return None
+
 
 def _count_readable_chars(text: str) -> int:
     """
@@ -197,10 +278,15 @@ def _is_too_long(text: str) -> bool:
     return read_seconds > MAX_OTHER_READ_SECONDS
 
 
-def analyze(text: str):
+def analyze(text: str, source_snippets: list[str] | None = None,
+            relation_mode: str | None = None):
     original = text
     text = (text or "").strip()
     reasons = []
+    source_snippets = [s.strip() for s in (source_snippets or []) if (s or "").strip()]
+    relation_mode = (relation_mode or "grounded").strip().lower()
+    if relation_mode not in {"grounded", "random_unrelated"}:
+        relation_mode = "grounded"
 
     if not text:
         reasons.append("empty")
@@ -258,11 +344,35 @@ def analyze(text: str):
             reasons.append(label)
             break
 
+    # Shared-memory grounding gate:
+    # - random_unrelated mode must not pretend to quote prior shared dialogue
+    # - any shared-memory claim requires source snippets and topical overlap
+    memory_claim = False
+    for pattern, _label in _SHARED_MEMORY_PATTERNS:
+        if pattern.search(text):
+            memory_claim = True
+            break
+    quoted_spans = _extract_quoted_spans(text)
+
+    if relation_mode == "random_unrelated" and (memory_claim or quoted_spans):
+        reasons.append("random_mode_shared_memory_or_quote")
+    elif memory_claim:
+        if not source_snippets:
+            reasons.append("ungrounded_shared_memory_no_source")
+        else:
+            missing_quote = _find_ungrounded_quote(quoted_spans, source_snippets)
+            if missing_quote:
+                reasons.append("ungrounded_shared_memory_quote")
+            elif not _has_context_overlap(text, source_snippets):
+                reasons.append("ungrounded_shared_memory_overlap")
+
     ok = len(set(reasons)) == 0
     return {
         "ok": ok,
         "text": original,
         "normalized": text,
+        "relation_mode": relation_mode,
+        "source_snippet_count": len(source_snippets),
         "reasons": sorted(set(reasons)),
     }
 
@@ -270,9 +380,14 @@ def analyze(text: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("text", nargs="?")
+    parser.add_argument("--source-snippet", dest="source_snippets", action="append", default=[])
+    parser.add_argument("--relation-mode", dest="relation_mode", default="grounded")
     args = parser.parse_args()
     text = args.text if args.text is not None else sys.stdin.read()
-    print(json.dumps(analyze(text), ensure_ascii=False))
+    print(json.dumps(
+        analyze(text, source_snippets=args.source_snippets, relation_mode=args.relation_mode),
+        ensure_ascii=False,
+    ))
 
 
 if __name__ == "__main__":

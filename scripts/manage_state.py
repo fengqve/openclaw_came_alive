@@ -36,6 +36,8 @@ DEFAULT_STATE = {
     #   - trace_id, theme, kind, chosen_score, chosen_at_ts  (from choose-trace)
     #   - source_snippets: list of raw context strings that drove the trace selection
     #   - associated_contexts: top linked context fragments with overlap scores
+    #   - relation_mode: "grounded" | "random_unrelated" (whether candidate should
+    #                    stay context-grounded or intentionally allow off-context randomness)
     #   - concrete_topic: human-readable topic/object the message refers to
     #   - why_chosen: short explanation of why this trace beat others at this moment
     #   - sent_text: the final sentence actually sent (filled in at mark-sent time)
@@ -177,6 +179,11 @@ def save_state(path: Path, state: dict) -> None:
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
+
+
+def normalize_relation_mode(raw: str | None) -> str:
+    mode = (raw or "").strip().lower()
+    return mode if mode in {"grounded", "random_unrelated"} else "grounded"
 
 
 def prune_and_decay_traces(state: dict, now: int | None = None) -> bool:
@@ -325,10 +332,13 @@ def cmd_choose_trace(path: Path, quietness: float,
                      source_snippets: list[str] | None = None,
                      association_snippets: list[str] | None = None,
                      concrete_topic: str | None = None,
-                     why_chosen: str | None = None):
+                     why_chosen: str | None = None,
+                     relation_mode: str | None = None):
     state = load_state(path)
     prune_and_decay_traces(state)
     threshold = CONFIG["impulse_threshold"]
+
+    relation_mode = normalize_relation_mode(relation_mode)
 
     context_pool: list[str] = []
     if association_snippets:
@@ -383,6 +393,7 @@ def cmd_choose_trace(path: Path, quietness: float,
             "associated_contexts": chosen.get("associated_contexts", []),
             # Rich context: what triggered this trace, why it won, and what it refers to
             "source_snippets": source_snippets or [],
+            "relation_mode": relation_mode,
             "concrete_topic": (concrete_topic or "").strip(),
             "why_chosen": (why_chosen or "").strip(),
             # Filled in at mark-sent time
@@ -584,6 +595,7 @@ def main():
     parser.add_argument("--association-snippet", dest="association_snippets", action="append", default=None)
     parser.add_argument("--concrete-topic", dest="concrete_topic", default=None)
     parser.add_argument("--why-chosen", dest="why_chosen", default=None)
+    parser.add_argument("--relation-mode", dest="relation_mode", default=None)
     args = parser.parse_args()
 
     path = Path(args.state).expanduser()
@@ -605,6 +617,7 @@ def main():
             association_snippets=args.association_snippets,
             concrete_topic=args.concrete_topic,
             why_chosen=args.why_chosen,
+            relation_mode=args.relation_mode,
         )
     elif args.command == "mark-sent":
         result = cmd_mark_sent(path, args.message_id,
